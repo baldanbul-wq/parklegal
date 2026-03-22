@@ -35,6 +35,7 @@ _CACHE: Dict[str, Any] = {
 
 
 async def _fetch_courts() -> List[dict]:
+    logger.info("Получение адресов судов г. Москва")
     headers = {
         "Accept": "application/json",
         "User-Agent": "ParkLegal-DocGen/1.0",
@@ -226,6 +227,7 @@ def find_court_by_latlon(lat: float, lon: float) -> Optional[CourtHit]:
     Shapely 2.x: STRtree.query(...) возвращает индексы (numpy.int64),
     поэтому достаем геометрию через geoms[i].
     """
+    logger.debug("find_court_by_latlon(%r, %r)", lat, lon, extra={"lat": lat, "lon": lon})
     idx = _CACHE.get("index")
     geoms = _CACHE.get("geoms") or []
     geom_to_court = _CACHE.get("geom_to_court") or {}

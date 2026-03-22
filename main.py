@@ -79,7 +79,7 @@ async def resolve_court_fields(address: str | None):
         logger.debug("geocode_address(%r) -> (%r, %r)", address, lat, lon)
         hit = find_court_by_latlon(lat, lon)
         if not hit:
-            logger.debug("⚠️ Суд не найден для этих координат")
+            logger.debug("Суд не найден для этих координат")
             return "", "", "Суд не удалось определить автоматически. Проверь адрес или впиши суд вручную."
         logger.debug("find_court_by_latlon -> %r", hit)
         # Возвращаем значения прямо

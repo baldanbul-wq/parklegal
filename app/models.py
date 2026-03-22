@@ -1,6 +1,6 @@
 import json
-from typing import List, Optional
-from pydantic import BaseModel, Field, field_validator
+from typing import List
+from pydantic import BaseModel, Field, model_validator, RootModel
 
 # class GenerateRequest(BaseModel):
 #     number: str = Field(..., min_length=4, max_length=64)
@@ -21,9 +21,9 @@ class GenerateRequest(BaseModel):
         pattern=r"^\d{2}\.\d{2}\.\d{4}$",
         description="Дата в формате ДД.ММ.ГГГГ"
     )
-    address: Optional[str] = Field(
+    address: str = Field(
         None,
-        description="Адрес (необязательно)"
+        description="Адрес"
     )
 
     model_config = {
@@ -40,10 +40,12 @@ class GenerateRequest(BaseModel):
     }
 
 
-class PolygonData(BaseModel):
-    __root__: List[List[List[float]]]
-
-    @field_validator("__root__", mode="before")
+class PolygonData(RootModel[List[List[List[float]]]]):
+    """
+    Модель для поля polygonData — представляет собой вложенный список координат.
+    Автоматически парсит строку JSON.
+    """
+    @model_validator(mode="before")
     @classmethod
     def parse_json_string(cls, value):
         if isinstance(value, str):
@@ -58,8 +60,7 @@ class PolygonData(BaseModel):
 
     def coordinates(self) -> List[List[List[float]]]:
         """Возвращает вложенный список координат."""
-        return self.__root__
-
+        return self.root
 
 
 class CourtModel(BaseModel):
