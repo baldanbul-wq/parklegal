@@ -38,12 +38,6 @@ NEW_COURTS: List[CourtModel] = []
 
 
 async def fetch_courts_list() -> List[CourtModel]:
-    """
-    Загружает список судов с https://mos-gorsud.ru/api/courts
-    и возвращает список объектов CourtModel.
-
-    Автоматически парсит polygonData из строки JSON.
-    """
     async with httpx.AsyncClient(timeout=20.0) as client:
         response = await client.get(
             COURTS_URL,
@@ -62,16 +56,21 @@ async def fetch_courts_list() -> List[CourtModel]:
     courts: List[CourtModel] = []
     for item in data:
         try:
-            # Pydantic автоматически обработает строку в polygonData
             court = CourtModel(**item)
             courts.append(court)
         except Exception as e:
-            # Логируй, если нужно, или пропускай битые данные
-            print(f"Ошибка при валидации суда {item.get('id')}, {item.get('alias')}: {e}")
+            print(f"Ошибка при валидации суда {item.get('id')}: {e}")
             continue
+
+    # Обновляем глобальный список
     NEW_COURTS.clear()
     NEW_COURTS.extend(courts)
+
     logger.info("Загружено %d судов в NEW_COURTS", len(NEW_COURTS))
+
+    # Перестраиваем кэш на основе новых данных
+    _rebuild_cache_from_new_courts()
+
     return courts
 
 
@@ -227,40 +226,31 @@ def _build_geom_for_court(court: dict):
     return MultiPolygon(polys)
 
 
-def _rebuild_cache(raw: List[dict]) -> None:
+
+def _rebuild_cache_from_new_courts() -> None:
+    """
+    Строит spatial-индекс на основе актуального списка NEW_COURTS.
+    Вызывается после обновления NEW_COURTS.
+    """
     geoms: List[Polygon | MultiPolygon] = []
     geom_to_court: Dict[int, dict] = {}
 
-    for c in raw:
-        g = _build_geom_for_court(c)
+    for court in NEW_COURTS:
+        g = _build_geom_for_court(court.model_dump())
         if g is None:
+            logger.debug("No g from court %s", court.alias)
             continue
         geoms.append(g)
-        geom_to_court[id(g)] = c
+        geom_to_court[id(g)] = court.model_dump()
+
+    logger.debug("geoms: %r: ", geoms)
+    logger.debug("geoms_to_court: %r", geom_to_court)
+    
 
     _CACHE["geoms"] = geoms
     _CACHE["geom_to_court"] = geom_to_court
     _CACHE["index"] = STRtree(geoms) if geoms else None
 
-
-async def refresh_courts(force: bool = False) -> None:
-    now = time.time()
-    if (not force) and _CACHE["index"] and (now - _CACHE["loaded_at"] < REFRESH_EVERY_SECONDS):
-        return
-
-    raw = await _fetch_courts()
-    _rebuild_cache(raw)
-    _CACHE["loaded_at"] = now
-    _CACHE["last_error"] = None
-
-
-async def refresh_loop() -> None:
-    while True:
-        try:
-            await refresh_courts(force=False)
-        except Exception as e:
-            _CACHE["last_error"] = str(e)
-        await asyncio.sleep(REFRESH_EVERY_SECONDS)
 
 
 def find_court_by_latlon(lat: float, lon: float) -> Optional[CourtHit]:
@@ -275,6 +265,7 @@ def find_court_by_latlon(lat: float, lon: float) -> Optional[CourtHit]:
 
     if not idx or not geoms:
         logger.warning("not idx or not geoms in find_court_by_latlon call")
+        logger.debug("idx is %r, geoms is %r", idx, geoms)
         return None
 
     point = Point(lon, lat)
@@ -303,27 +294,6 @@ def find_court_by_latlon(lat: float, lon: float) -> Optional[CourtHit]:
                 )
         except Exception:
             logger.warning("geom_to_court: %s, skip to next", exc)
-            continue
-
-    return None
-    point = Point(float(lon), float(lat))
-    candidates = idx.query(point)
-
-    for g in candidates:
-        try:
-            if g.covers(point):
-                c = geom_to_court.get(id(g))
-                if not c:
-                    continue
-                return CourtHit(
-                    id=str(c.get("id", "")),
-                    code=str(c.get("code", "")) if c.get("code") is not None else None,
-                    full_name=str(c.get("fullName", "")),
-                    address=str(c.get("address", "")),
-                    phones=(c.get("phones") or None),
-                    subway=(c.get("subwayStation") or None),
-                )
-        except Exception:
             continue
 
     return None
