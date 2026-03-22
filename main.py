@@ -28,8 +28,6 @@ from app.utils import (
     _safe_filename,
 )
 
-
-
 # --- патч для кэша судов ---
 from asyncio import Event
 COURTS_READY = Event()
@@ -115,25 +113,8 @@ async def generate(payload: GenerateRequest):
 
     msk_today = datetime.now(ZoneInfo("Europe/Moscow")).strftime("%d.%m.%Y")
 
-    # === ожидание заполнения судов ===
-    MAX_WAIT = 5.0  # секунд
-    INTERVAL = 0.1  # проверка каждые 100 мс
-
-    start_time = time.time()
     court_name, court_address, warning = await resolve_court_fields(address)
 
-
-
-# jschatten: Ожидание суда циклом приводит к бесконечности, если суды так и не прогрузятся
-# Такое лучше обрабатывать в контроллере, типа "Not Reaey", 503
-    # while not court_name or not court_address:
-    #     await asyncio.sleep(INTERVAL)
-    #     if time.time() - start_time > MAX_WAIT:
-    #         raise HTTPException(
-    #             status_code=500,
-    #             detail="Не удалось получить данные о суде вовремя. Проверь адрес или попробуй позже."
-    #         )
-    #     court_name, court_address, warning = await resolve_court_fields(address)
 
     # jschatten: Добавляем ожидание готовности кэша судов
     if not COURTS_READY.is_set():
@@ -147,7 +128,6 @@ async def generate(payload: GenerateRequest):
 
     court_name, court_address, warning = await resolve_court_fields(address)
 
-    # jschatten: Если после нормальной работы geocoder+cache нет данных - просто возвращаем предупреждение
     if not court_name or not court_address:
         if warning:
             return {
