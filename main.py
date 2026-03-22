@@ -104,8 +104,10 @@ async def generate(payload: GenerateRequest):
     if not tpl_path or not os.path.exists(tpl_path):
         raise HTTPException(
             status_code=400,
-            detail="Не удалось определить шаблон: номер должен начинаться с 0356… (МАДИ) или 0355… (АМПП), "
-                   "и файлы шаблонов должны лежать в /opt/docgen/templates."
+            detail=(
+                "Не удалось определить шаблон: номер должен начинаться с 0356… (МАДИ) "
+                f"или 0355… (АМПП), и файлы шаблонов должны лежать в {STORAGE_DIR}"
+            ),
         )
 
     msk_today = datetime.now(ZoneInfo("Europe/Moscow")).strftime("%d.%m.%Y")
