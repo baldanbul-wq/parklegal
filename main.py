@@ -4,6 +4,7 @@ import os
 import re
 import time
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -101,10 +102,10 @@ class GenerateRequest(BaseModel):
     date: str = Field(..., min_length=4, max_length=32)
     address: str | None = None
 
-app = FastAPI(title="DocGen", version="1.0.0")
 
-@app.on_event("startup")
-async def startup():
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     async def _warmup():
         try:
             await refresh_courts(force=True)
@@ -115,6 +116,36 @@ async def startup():
     asyncio.create_task(refresh_loop())
     await _warmup()
 
+    yield # starting app
+
+
+app = FastAPI(title="DocGen", version="1.0.0")
+
+# jschatten: on_event deprectaed, лучше в lifespan
+# @app.on_event("startup")
+# async def startup():
+#     async def _warmup():
+#         try:
+#             await refresh_courts(force=True)
+#             print("[courts] warmup ok")
+#             COURTS_READY.set()
+#         except Exception as e:
+#             print(f"[courts] warmup failed: {e}")
+#     asyncio.create_task(refresh_loop())
+#     await _warmup()
+
+
+# jschatten: Дублирующий код
+# # === COURTS WARMUP (ParkLegal) ===
+# import asyncio as _courts_asyncio
+
+# @app.on_event("startup")
+# async def _courts_warmup_on_startup():
+#     # импорт внутри, чтобы не зависеть от порядка импортов в файле
+#     from app.courts_service import refresh_courts, refresh_loop
+#     await refresh_courts(force=True)
+#     _courts_asyncio.create_task(refresh_loop())
+#     print("[courts] warmup ok")
 
 async def resolve_court_fields(address: str | None):
     """
@@ -220,16 +251,3 @@ def download(filename: str):
         filename=file_path.name,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )
-
-
-
-# === COURTS WARMUP (ParkLegal) ===
-import asyncio as _courts_asyncio
-
-@app.on_event("startup")
-async def _courts_warmup_on_startup():
-    # импорт внутри, чтобы не зависеть от порядка импортов в файле
-    from app.courts_service import refresh_courts, refresh_loop
-    await refresh_courts(force=True)
-    _courts_asyncio.create_task(refresh_loop())
-    print("[courts] warmup ok")
