@@ -1,29 +1,25 @@
 from __future__ import annotations
 
 import os
-import re
 import time
 import uuid
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import uvicorn
 
+from docx import Document
+
 from fastapi import FastAPI, HTTPException
-import asyncio
+from fastapi.responses import FileResponse, JSONResponse
 
 from app.courts_service import _CACHE as COURTS_CACHE
 from app.courts_service import refresh_courts, refresh_loop, find_court_by_latlon
 from app.geocoder import geocode_address
 from app.models import GenerateRequest
 from app.config import settings
-from fastapi.responses import FileResponse, JSONResponse
-
-from docx import Document
-from docx.shared import Pt
-from docx.oxml.ns import qn
-
 from app.logger import logger
 
 from app.utils import (
@@ -32,6 +28,8 @@ from app.utils import (
     _cleanup_storage,
     _safe_filename,
 )
+
+
 
 # --- патч для кэша судов ---
 from asyncio import Event
@@ -106,7 +104,7 @@ async def generate(payload: GenerateRequest):
             status_code=400,
             detail=(
                 "Не удалось определить шаблон: номер должен начинаться с 0356… (МАДИ) "
-                f"или 0355… (АМПП), и файлы шаблонов должны лежать в {STORAGE_DIR}"
+                f"или 0355… (АМПП), и файлы шаблонов должны лежать в {TEMPLATES_DIR}"
             ),
         )
 

@@ -31,9 +31,10 @@ class GenerateRequest(BaseModel):
         "json_schema_extra": {
             "examples": [
                 {
-                    "number": "DOC-12345",
+                    "number": "0356-SomeDoc",
                     "date": "01.01.2023",
                     "address": "оружейный переулок 41, Москва"
+                    # 129281, г. Москва, ул. Летчика Бабушкина, д.39А
                 }
             ]
         }

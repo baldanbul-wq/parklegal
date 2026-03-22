@@ -8,6 +8,8 @@ import httpx
 from shapely.geometry import Point, Polygon, MultiPolygon
 from shapely.strtree import STRtree
 
+from app.logger import logger
+
 COURTS_URL = "https://mos-gorsud.ru/api/courts"
 REFRESH_EVERY_SECONDS = 24 * 3600
 HTTP_TIMEOUT = 25
@@ -229,13 +231,15 @@ def find_court_by_latlon(lat: float, lon: float) -> Optional[CourtHit]:
     geom_to_court = _CACHE.get("geom_to_court") or {}
 
     if not idx or not geoms:
+        logger.warning("not idx or not geoms in find_court_by_latlon call")
         return None
 
     point = Point(lon, lat)
 
     try:
         cand_idx = idx.query(point)  # numpy array of indices (Shapely 2)
-    except Exception:
+    except Exception as exc:
+        logger.warning("cand_idx exception: %s", exc)
         return None
 
     # Пробуем сначала covers (включая границу), потом contains
@@ -255,6 +259,7 @@ def find_court_by_latlon(lat: float, lon: float) -> Optional[CourtHit]:
                     code=(str(c.get("code")) if c.get("code") is not None else None),
                 )
         except Exception:
+            logger.warning("geom_to_court: %s, skip to next", exc)
             continue
 
     return None

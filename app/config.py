@@ -1,8 +1,7 @@
 # app/config.py
 from pathlib import Path
 from pydantic_settings import SettingsConfigDict, BaseSettings
-from pydantic import field_validator
-
+from pydantic import field_validator, SecretStr
 
 class Settings(BaseSettings):
     # Время жизни файлов (в секундах)
@@ -18,6 +17,9 @@ class Settings(BaseSettings):
     # Пути
     templates_dir: Path = Path("templates")
     storage_dir: Path = Path("storage")
+
+    # Ключ для Яндекс.Геокодера
+    yandex_geocoder_api_key: SecretStr
 
     # Валидация путей — делаем абсолютными относительно корня проекта
     @field_validator("templates_dir", "storage_dir", mode="before")
