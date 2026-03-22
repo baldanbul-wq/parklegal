@@ -1,0 +1,5 @@
+httpx
+fastapi
+# docx
+python-docx
+shapely
