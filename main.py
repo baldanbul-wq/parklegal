@@ -15,8 +15,7 @@ from docx import Document
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 
-from app.courts_service import _CACHE as COURTS_CACHE
-from app.courts_service import refresh_courts, refresh_loop, find_court_by_latlon
+from app.courts_service import find_court_by_latlon, NEW_COURTS, _rebuild_cache, fetch_courts_list
 from app.geocoder import geocode_address
 from app.models import GenerateRequest
 from app.config import settings
@@ -49,20 +48,25 @@ TPL_AMPP = str(TEMPLATES_DIR / "Шаблон жалобы ГКУ АМПП.docx")
 # jschatten: on_event deprectaed, лучше в lifespan
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    async def _warmup():
-        try:
-            await refresh_courts(force=True)
-            logger.info("[courts] warmup ok")
-            COURTS_READY.set()
-        except Exception as e:
-            logger.error("[courts] warmup failed: %s", e)
-    asyncio.create_task(refresh_loop())
-    await _warmup()
+    logger.info("Загрузка данных о судах при старте...")
+    try:
+        courts = await fetch_courts_list()
+
+        # Построить spatial индекс
+        raw_dicts = [court.model_dump() for court in courts]
+        _rebuild_cache(raw_dicts)
+        logger.info("Кэш геометрий построен")
+
+        COURTS_READY.set()
+        logger.info("Сервис готов к работе")
+    except Exception as e:
+        logger.error("Ошибка при инициализации кэша судов: %s", e)
+        # Можно не падать, но клиенты получат 503 до следующего авто-обновления
 
     yield # starting app
 
 
-app = FastAPI(title="DocGen", version="1.0.0")
+app = FastAPI(title="DocGen", version="1.0.0", lifespan=lifespan)
 
 
 async def resolve_court_fields(address: str | None):
@@ -78,6 +82,7 @@ async def resolve_court_fields(address: str | None):
         lat, lon = await geocode_address(address)
         logger.debug("geocode_address(%r) -> (%r, %r)", address, lat, lon)
         hit = find_court_by_latlon(lat, lon)
+        logger.debug("NEW_COURTS list is %s", NEW_COURTS)
         if not hit:
             logger.debug("Суд не найден для этих координат")
             return "", "", "Суд не удалось определить автоматически. Проверь адрес или впиши суд вручную."

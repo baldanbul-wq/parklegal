@@ -9,6 +9,7 @@ from shapely.geometry import Point, Polygon, MultiPolygon
 from shapely.strtree import STRtree
 
 from app.logger import logger
+from app.models import CourtModel
 
 COURTS_URL = "https://mos-gorsud.ru/api/courts"
 REFRESH_EVERY_SECONDS = 24 * 3600
@@ -32,6 +33,46 @@ _CACHE: Dict[str, Any] = {
     "geom_to_court": {},
     "index": None,
 }
+
+NEW_COURTS: List[CourtModel] = []
+
+
+async def fetch_courts_list() -> List[CourtModel]:
+    """
+    Загружает список судов с https://mos-gorsud.ru/api/courts
+    и возвращает список объектов CourtModel.
+
+    Автоматически парсит polygonData из строки JSON.
+    """
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        response = await client.get(
+            COURTS_URL,
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "ParkLegal-DocGen/1.0",
+                "Referer": "https://mos-gorsud.ru/territorial",
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+
+    if not isinstance(data, list):
+        raise ValueError("Ожидается массив объектов")
+
+    courts: List[CourtModel] = []
+    for item in data:
+        try:
+            # Pydantic автоматически обработает строку в polygonData
+            court = CourtModel(**item)
+            courts.append(court)
+        except Exception as e:
+            # Логируй, если нужно, или пропускай битые данные
+            print(f"Ошибка при валидации суда {item.get('id')}, {item.get('alias')}: {e}")
+            continue
+    NEW_COURTS.clear()
+    NEW_COURTS.extend(courts)
+    logger.info("Загружено %d судов в NEW_COURTS", len(NEW_COURTS))
+    return courts
 
 
 async def _fetch_courts() -> List[dict]:

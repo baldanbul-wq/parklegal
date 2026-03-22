@@ -1,5 +1,5 @@
 import json
-from typing import List
+from typing import List, Optional
 from pydantic import BaseModel, Field, model_validator, RootModel
 
 # class GenerateRequest(BaseModel):
@@ -75,7 +75,7 @@ class CourtModel(BaseModel):
     businessHours: str
     email: str
     contact: str
-    latitude: str  # Можно преобразовать в float, если нужно
-    longitude: str  # Можно преобразовать в float, если нужно
+    latitude: Optional[str] = None
+    longitude: Optional[str] = None
     subwayStation: str
     polygonData: PolygonData
