@@ -48,11 +48,7 @@ TPL_AMPP = str(TEMPLATES_DIR / "Шаблон жалобы ГКУ АМПП.docx")
 async def lifespan(app: FastAPI):
     logger.info("Загрузка данных о судах при старте...")
     try:
-        courts = await fetch_courts_list()
-
-        # Построить spatial индекс
-        # raw_dicts = [court.model_dump() for court in courts]
-        # _rebuild_cache_from_new_courts(raw_dicts)
+        await fetch_courts_list()
         logger.info("Кэш геометрий построен")
 
         COURTS_READY.set()

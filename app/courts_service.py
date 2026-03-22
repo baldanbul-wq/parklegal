@@ -1,6 +1,3 @@
-import asyncio
-import json
-import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -72,19 +69,6 @@ async def fetch_courts_list() -> List[CourtModel]:
     _rebuild_cache_from_new_courts()
 
     return courts
-
-
-async def _fetch_courts() -> List[dict]:
-    logger.info("Получение адресов судов г. Москва")
-    headers = {
-        "Accept": "application/json",
-        "User-Agent": "ParkLegal-DocGen/1.0",
-        "Referer": "https://mos-gorsud.ru/territorial",
-    }
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-        r = await client.get(COURTS_URL, headers=headers)
-        r.raise_for_status()
-        return r.json()
 
 
 def _looks_like_point(x) -> bool:
@@ -169,17 +153,19 @@ def _bbox_score_for_moscow(geom) -> float:
     return score
 
 
-def _build_geom_for_court(court: dict):
-    pd = court.get("polygonData")
-    if not pd:
-        return None
-
+def _build_geom_for_court(court: CourtModel) -> Optional[Polygon | MultiPolygon]:
+    """
+    Строит геометрию полигона для суда на основе его polygonData.
+    Принимает объект CourtModel.
+    """
     try:
-        data = json.loads(pd)
-    except Exception:
+        # court.polygonData — это RootModel, используем .root для получения данных
+        data = court.polygonData.root  # Уже распарсенный список списков списков
+    except Exception as e:
+        logger.debug("Не удалось получить polygonData у суда %s: %s", court.alias, e)
         return None
 
-    if not isinstance(data, list) or not data:
+    if not data or not isinstance(data, list):
         return None
 
     polys_latlon: List[Polygon] = []
@@ -236,16 +222,15 @@ def _rebuild_cache_from_new_courts() -> None:
     geom_to_court: Dict[int, dict] = {}
 
     for court in NEW_COURTS:
-        g = _build_geom_for_court(court.model_dump())
+        g = _build_geom_for_court(court)
         if g is None:
             logger.debug("No g from court %s", court.alias)
             continue
         geoms.append(g)
         geom_to_court[id(g)] = court.model_dump()
 
-    logger.debug("geoms: %r: ", geoms)
-    logger.debug("geoms_to_court: %r", geom_to_court)
-    
+    logger.debug("geoms count: %d: ", len(geoms))
+    logger.debug("geoms_to_court: %d", len(geom_to_court))
 
     _CACHE["geoms"] = geoms
     _CACHE["geom_to_court"] = geom_to_court
