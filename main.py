@@ -16,7 +16,7 @@ import asyncio
 from app.courts_service import _CACHE as COURTS_CACHE
 from app.courts_service import refresh_courts, refresh_loop, find_court_by_latlon
 from app.geocoder import geocode_address
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from docx import Document
@@ -104,7 +104,8 @@ def _safe_filename(s: str) -> str:
 
 class GenerateRequest(BaseModel):
     number: str = Field(..., min_length=4, max_length=64)
-    date: str = Field(..., min_length=4, max_length=32)
+    # jschatten: Только формат ДД.ММ.ГГГГ, проверка регуляркой
+    date: str = Field(..., pattern=r"^\d{2}\.\d{2}\.\d{4}$")  
     address: str | None = None
 
 
@@ -184,7 +185,7 @@ async def generate(payload: GenerateRequest):
     number = payload.number.strip()
     date_str = payload.date.strip()
     address = (payload.address or "").strip()
-
+    logger.info("Запрос на генерацию: number=%s, date=%s, address=%r", number, date_str, address)
     tpl_path = _choose_template_by_number(number)
     if not tpl_path or not os.path.exists(tpl_path):
         raise HTTPException(
@@ -202,14 +203,45 @@ async def generate(payload: GenerateRequest):
     start_time = time.time()
     court_name, court_address, warning = await resolve_court_fields(address)
 
-    while not court_name or not court_address:
-        await asyncio.sleep(INTERVAL)
-        if time.time() - start_time > MAX_WAIT:
+
+
+# jschatten: Ожидание суда циклом приводит к бесконечности, если суды так и не прогрузятся
+# Такое лучше обрабатывать в контроллере, типа "Not Reaey", 503
+    # while not court_name or not court_address:
+    #     await asyncio.sleep(INTERVAL)
+    #     if time.time() - start_time > MAX_WAIT:
+    #         raise HTTPException(
+    #             status_code=500,
+    #             detail="Не удалось получить данные о суде вовремя. Проверь адрес или попробуй позже."
+    #         )
+    #     court_name, court_address, warning = await resolve_court_fields(address)
+
+    # jschatten: Добавляем ожидание готовности кэша судов
+    if not COURTS_READY.is_set():
+        try:
+            await asyncio.wait_for(COURTS_READY.wait(), timeout=5.0)
+        except asyncio.TimeoutError:
             raise HTTPException(
-                status_code=500,
-                detail="Не удалось получить данные о суде вовремя. Проверь адрес или попробуй позже."
+                status_code=503,
+                detail="Сервис временно недоступен: данные о судах ещё не загружены. Попробуйте позже."
             )
-        court_name, court_address, warning = await resolve_court_fields(address)
+
+    court_name, court_address, warning = await resolve_court_fields(address)
+
+    # jschatten: Если после нормальной работы geocoder+cache нет данных - просто возвращаем предупреждение
+    if not court_name or not court_address:
+        if warning:
+            return {
+                "download_url": None,
+                "expires_in": 0,
+                "warning": warning
+            }
+        else:
+            raise HTTPException(
+                status_code=422,
+                detail="Не удалось определить суд по указанному адресу."
+            )
+
 
     # mapping с гарантированно заполненными значениями
     mapping = {
@@ -256,3 +288,8 @@ def download(filename: str):
         filename=file_path.name,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )
+
+# jschatten Тут обычно health-check и вот это всё, типа живое
+@app.get("/")
+def root():
+    return JSONResponse( {"status": "ok"}, status_code=200)

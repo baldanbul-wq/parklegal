@@ -3,3 +3,4 @@ fastapi
 # docx
 python-docx
 shapely
+uvicorn
