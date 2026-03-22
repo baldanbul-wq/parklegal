@@ -4,6 +4,7 @@ import os
 import re
 import time
 import uuid
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from datetime import datetime
@@ -21,6 +22,10 @@ from pydantic import BaseModel, Field
 from docx import Document
 from docx.shared import Pt
 from docx.oxml.ns import qn
+
+# Настройка логгера
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 # --- патч для кэша судов ---
 from asyncio import Event
@@ -109,10 +114,10 @@ async def lifespan(app: FastAPI):
     async def _warmup():
         try:
             await refresh_courts(force=True)
-            print("[courts] warmup ok")
+            logger.info("[courts] warmup ok")
             COURTS_READY.set()
         except Exception as e:
-            print(f"[courts] warmup failed: {e}")
+            logger.error("[courts] warmup failed: %s", e)
     asyncio.create_task(refresh_loop())
     await _warmup()
 
@@ -127,10 +132,10 @@ app = FastAPI(title="DocGen", version="1.0.0")
 #     async def _warmup():
 #         try:
 #             await refresh_courts(force=True)
-#             print("[courts] warmup ok")
+#             logger.info("[courts] warmup ok")
 #             COURTS_READY.set()
 #         except Exception as e:
-#             print(f"[courts] warmup failed: {e}")
+#             logger.error("[courts] warmup failed: %s", e)
 #     asyncio.create_task(refresh_loop())
 #     await _warmup()
 
@@ -145,7 +150,7 @@ app = FastAPI(title="DocGen", version="1.0.0")
 #     from app.courts_service import refresh_courts, refresh_loop
 #     await refresh_courts(force=True)
 #     _courts_asyncio.create_task(refresh_loop())
-#     print("[courts] warmup ok")
+#     logger.info("[courts] warmup ok")
 
 async def resolve_court_fields(address: str | None):
     """
@@ -153,21 +158,21 @@ async def resolve_court_fields(address: str | None):
     Этот патч логирует процесс и подставляет суд, если он найден в кэше.
     """
     if not address or not address.strip():
-        print("[DEBUG] адрес пустой")
+        logger.debug("адрес пустой")
         return "", "", None
 
     try:
         lat, lon = await geocode_address(address)
-        print(f"[DEBUG] geocode_address({address}) -> ({lat}, {lon})")
+        logger.debug("geocode_address(%r) -> (%r, %r)", address, lat, lon)
         hit = find_court_by_latlon(lat, lon)
         if not hit:
-            print("[DEBUG] ⚠️ Суд не найден для этих координат")
+            logger.debug("⚠️ Суд не найден для этих координат")
             return "", "", "Суд не удалось определить автоматически. Проверь адрес или впиши суд вручную."
-        print(f"[DEBUG] find_court_by_latlon -> {hit}")
+        logger.debug("find_court_by_latlon -> %r", hit)
         # Возвращаем значения прямо
         return hit.full_name, hit.address, None
     except Exception as e:
-        print(f"[DEBUG] Ошибка при определении суда: {e}")
+        logger.debug("Ошибка при определении суда: %s", e)
         return "", "", "Не удалось автоматически определить суд. Проверь адрес или впиши суд вручную."
 
 
@@ -216,9 +221,9 @@ async def generate(payload: GenerateRequest):
     }
 
     # --- лог для отладки ---
-    print("DEBUG court_name:", repr(court_name))
-    print("DEBUG court_address:", repr(court_address))
-    print("DEBUG mapping:", {k: repr(v) for k,v in mapping.items()})
+    logger.debug("court_name: %r", court_name)
+    logger.debug("court_address: %r", court_address)
+    logger.debug("mapping: %r", {k: repr(v) for k,v in mapping.items()})
 
     doc = Document(tpl_path)
     _replace_everywhere(doc, mapping)
