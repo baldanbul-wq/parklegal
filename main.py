@@ -4,11 +4,11 @@ import os
 import re
 import time
 import uuid
-import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
+import uvicorn
 
 from fastapi import FastAPI, HTTPException
 import asyncio
@@ -16,100 +16,39 @@ import asyncio
 from app.courts_service import _CACHE as COURTS_CACHE
 from app.courts_service import refresh_courts, refresh_loop, find_court_by_latlon
 from app.geocoder import geocode_address
+from app.models import GenerateRequest
+from app.config import settings
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel, Field
 
 from docx import Document
 from docx.shared import Pt
 from docx.oxml.ns import qn
 
-# Настройка логгера
-logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger(__name__)
+from app.logger import logger
+
+from app.utils import (
+    _choose_template_by_number,
+    _replace_everywhere,
+    _cleanup_storage,
+    _safe_filename,
+)
 
 # --- патч для кэша судов ---
 from asyncio import Event
 COURTS_READY = Event()
 
+# jschatten: отдельная загрузка, чтобы можно было из окружения брать
+TTL_SECONDS = settings.ttl_seconds
+PUBLIC_BASE = settings.public_base
 BASE_DIR = Path(__file__).resolve().parent.parent
-TEMPLATES_DIR = BASE_DIR / "templates"
-STORAGE_DIR = BASE_DIR / "storage"
+TEMPLATES_DIR = settings.templates_dir
+STORAGE_DIR = settings.storage_dir
 
 TPL_MADI = str(TEMPLATES_DIR / "Шаблон жалобы МАДИ.docx")
 TPL_AMPP = str(TEMPLATES_DIR / "Шаблон жалобы ГКУ АМПП.docx")
 
-TTL_SECONDS = int(os.getenv("DOCGEN_TTL_SECONDS", str(2 * 60 * 60)))
-PUBLIC_BASE = os.getenv("DOCGEN_PUBLIC_BASE", "http://192.168.1.6")
 
-def _choose_template_by_number(number: str) -> str:
-    if number.startswith("0356"):
-        return TPL_MADI
-    if number.startswith("0355"):
-        return TPL_AMPP
-    return ""
-
-def _replace_text_in_paragraph(paragraph, mapping: dict):
-    """
-    Безопасная замена плейсхолдеров в каждом Run,
-    с сохранением шрифта Times New Roman 12pt
-    """
-    for run in paragraph.runs:
-        for key, val in mapping.items():
-            if key in run.text:
-                run.text = run.text.replace(key, val)
-                # Сохраняем шрифт
-                run.font.name = "Times New Roman"
-                run.font.size = Pt(12)
-                run._element.rPr.rFonts.set(qn("w:ascii"), "Times New Roman")
-                run._element.rPr.rFonts.set(qn("w:hAnsi"), "Times New Roman")
-                run._element.rPr.rFonts.set(qn("w:eastAsia"), "Times New Roman")
-                run._element.rPr.rFonts.set(qn("w:cs"), "Times New Roman")
-
-def _replace_in_cell(cell, mapping: dict):
-    for p in cell.paragraphs:
-        _replace_text_in_paragraph(p, mapping)
-
-def _replace_everywhere(doc: Document, mapping: dict):
-    for p in doc.paragraphs:
-        _replace_text_in_paragraph(p, mapping)
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                _replace_in_cell(cell, mapping)
-    for section in doc.sections:
-        for hf in (section.header, section.footer):
-            if hf:
-                for p in hf.paragraphs:
-                    _replace_text_in_paragraph(p, mapping)
-                for table in getattr(hf, "tables", []):
-                    for row in table.rows:
-                        for cell in row.cells:
-                            _replace_in_cell(cell, mapping)
-
-def _cleanup_storage():
-    STORAGE_DIR.mkdir(parents=True, exist_ok=True)
-    now = time.time()
-    for p in STORAGE_DIR.glob("*.docx"):
-        try:
-            if now - p.stat().st_mtime > TTL_SECONDS:
-                p.unlink(missing_ok=True)
-        except Exception:
-            pass
-
-def _safe_filename(s: str) -> str:
-    s = s.strip()
-    s = re.sub(r"\s+", "_", s)
-    s = re.sub(r"[^A-Za-z0-9А-Яа-яЁё_\-\.]+", "", s)
-    return s[:80] or "doc"
-
-class GenerateRequest(BaseModel):
-    number: str = Field(..., min_length=4, max_length=64)
-    # jschatten: Только формат ДД.ММ.ГГГГ, проверка регуляркой
-    date: str = Field(..., pattern=r"^\d{2}\.\d{2}\.\d{4}$")  
-    address: str | None = None
-
-
-
+# jschatten: on_event deprectaed, лучше в lifespan
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     async def _warmup():
@@ -127,31 +66,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="DocGen", version="1.0.0")
 
-# jschatten: on_event deprectaed, лучше в lifespan
-# @app.on_event("startup")
-# async def startup():
-#     async def _warmup():
-#         try:
-#             await refresh_courts(force=True)
-#             logger.info("[courts] warmup ok")
-#             COURTS_READY.set()
-#         except Exception as e:
-#             logger.error("[courts] warmup failed: %s", e)
-#     asyncio.create_task(refresh_loop())
-#     await _warmup()
-
-
-# jschatten: Дублирующий код
-# # === COURTS WARMUP (ParkLegal) ===
-# import asyncio as _courts_asyncio
-
-# @app.on_event("startup")
-# async def _courts_warmup_on_startup():
-#     # импорт внутри, чтобы не зависеть от порядка импортов в файле
-#     from app.courts_service import refresh_courts, refresh_loop
-#     await refresh_courts(force=True)
-#     _courts_asyncio.create_task(refresh_loop())
-#     logger.info("[courts] warmup ok")
 
 async def resolve_court_fields(address: str | None):
     """
@@ -180,13 +94,13 @@ async def resolve_court_fields(address: str | None):
 
 @app.post("/generate")
 async def generate(payload: GenerateRequest):
-    _cleanup_storage()
+    _cleanup_storage(STORAGE_DIR, TTL_SECONDS)
 
     number = payload.number.strip()
     date_str = payload.date.strip()
     address = (payload.address or "").strip()
     logger.info("Запрос на генерацию: number=%s, date=%s, address=%r", number, date_str, address)
-    tpl_path = _choose_template_by_number(number)
+    tpl_path = _choose_template_by_number(number, TPL_MADI, TPL_AMPP)
     if not tpl_path or not os.path.exists(tpl_path):
         raise HTTPException(
             status_code=400,
@@ -293,3 +207,8 @@ def download(filename: str):
 @app.get("/")
 def root():
     return JSONResponse( {"status": "ok"}, status_code=200)
+
+
+# jschatten для запуска через кончоль, попроще: python run.py
+if __name__ == "__main__":
+    uvicorn.run("main:app", host=settings.host, port=settings.port, reload=True)
