@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import os
-import time
 import uuid
-import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 from datetime import datetime
@@ -15,7 +13,7 @@ from docx import Document
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 
-from app.courts_service import find_court_by_latlon, NEW_COURTS, fetch_courts_list, _rebuild_cache_from_new_courts
+from app.courts_service import find_court_by_latlon, fetch_courts_list, _rebuild_cache_from_new_courts
 from app.geocoder import geocode_address
 from app.models import GenerateRequest
 from app.config import settings
@@ -56,7 +54,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error("Ошибка при инициализации кэша судов: %s", e)
         # Можно не падать, но клиенты получат 503 до следующего авто-обновления
-
     yield # starting app
 
 
@@ -108,20 +105,6 @@ async def generate(payload: GenerateRequest):
         )
 
     msk_today = datetime.now(ZoneInfo("Europe/Moscow")).strftime("%d.%m.%Y")
-
-    court_name, court_address, warning = await resolve_court_fields(address)
-
-
-    # jschatten: Добавляем ожидание готовности кэша судов
-    if not COURTS_READY.is_set():
-        try:
-            await asyncio.wait_for(COURTS_READY.wait(), timeout=5.0)
-        except asyncio.TimeoutError:
-            raise HTTPException(
-                status_code=503,
-                detail="Сервис временно недоступен: данные о судах ещё не загружены. Попробуйте позже."
-            )
-
     court_name, court_address, warning = await resolve_court_fields(address)
 
     if not court_name or not court_address:
@@ -137,21 +120,18 @@ async def generate(payload: GenerateRequest):
                 detail="Не удалось определить суд по указанному адресу."
             )
 
-
     # mapping с гарантированно заполненными значениями
     mapping = {
         "[doc_date]": msk_today,
-        "[resolution number]": number,
+        "[resolution_number]": number,
         "[date]": date_str,
-        "[sudname]": court_name,
-        "[sudadress]": court_address,
+        "[courtname]": court_name,
+        "[courtaddress]": court_address,
     }
 
     # --- лог для отладки ---
-    logger.debug("court_name: %r", court_name)
-    logger.debug("court_address: %r", court_address)
-    logger.debug("mapping: %r", {k: repr(v) for k,v in mapping.items()})
-
+    logger.debug("mapping: %r", mapping)
+    logger.debug("tpl_path %s", tpl_path)
     doc = Document(tpl_path)
     _replace_everywhere(doc, mapping)
 

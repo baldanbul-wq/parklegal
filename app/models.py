@@ -2,12 +2,6 @@ import json
 from typing import List, Optional
 from pydantic import BaseModel, Field, model_validator, RootModel
 
-# class GenerateRequest(BaseModel):
-#     number: str = Field(..., min_length=4, max_length=64)
-#     # jschatten: Только формат ДД.ММ.ГГГГ, проверка регуляркой
-#     date: str = Field(..., pattern=r"^\d{2}\.\d{2}\.\d{4}$")
-#     address: str | None = None
-
 
 class GenerateRequest(BaseModel):
     number: str = Field(

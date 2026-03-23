@@ -1,4 +1,3 @@
-import os
 import re
 import httpx
 from app.logger import logger

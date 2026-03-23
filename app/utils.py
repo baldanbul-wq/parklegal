@@ -5,8 +5,6 @@ import time
 from typing import Dict
 
 from docx import Document
-from docx.shared import Pt
-from docx.oxml.ns import qn
 
 
 def _choose_template_by_number(number: str, tpl_madi: str, tpl_ampp: str) -> str:
@@ -25,29 +23,44 @@ def _choose_template_by_number(number: str, tpl_madi: str, tpl_ampp: str) -> str
     return ""
 
 
-def _replace_text_in_paragraph(paragraph, mapping: Dict[str, str]):
-    """
-    Безопасная замена плейсхолдеров в каждом Run,
-    с сохранением шрифта Times New Roman 12pt.
-    """
-    for run in paragraph.runs:
-        for key, val in mapping.items():
-            if key in run.text:
-                run.text = run.text.replace(key, val)
-                # Сохраняем шрифт
-                run.font.name = "Times New Roman"
-                run.font.size = Pt(12)
-                rpr = run._element.rPr
-                rpr.rFonts.set(qn("w:ascii"), "Times New Roman")
-                rpr.rFonts.set(qn("w:hAnsi"), "Times New Roman")
-                rpr.rFonts.set(qn("w:eastAsia"), "Times New Roman")
-                rpr.rFonts.set(qn("w:cs"), "Times New Roman")
+def _replace_text_in_paragraph(paragraph, mapping: dict):
+    """Заменяет текст в абзаце, корректно работая с run'ами."""
+    if not paragraph.text.strip():
+        return
+
+    # Собираем весь текст
+    full_text = paragraph.text
+
+    # Проверяем, есть ли что заменять
+    found_key = next((k for k in mapping if k in full_text), None)
+    if not found_key:
+        return
+
+    # Применяем все замены
+    replaced_text = full_text
+    for key, value in mapping.items():
+        if key in replaced_text:
+            replaced_text = replaced_text.replace(key, value)
+
+    # Заменяем текст в первом run и удаляем остальные
+    if paragraph.runs:
+        first_run = paragraph.runs[0]
+        first_run.text = replaced_text
+        # Удаляем остальные run'ы
+        for run in paragraph.runs[1:]:
+            p = run._element
+            p.getparent().remove(p)
 
 
-def _replace_in_cell(cell, mapping: Dict[str, str]):
-    """Замена текста во всех абзацах ячейки."""
+def _replace_in_cell(cell, mapping: dict):
+    """Обработка ячейки таблицы: абзацы + таблицы внутри ячейки (вложенные)"""
     for paragraph in cell.paragraphs:
         _replace_text_in_paragraph(paragraph, mapping)
+
+    for table in cell.tables:
+        for row in table.rows:
+            for cell_inner in row.cells:
+                _replace_in_cell(cell_inner, mapping)
 
 
 def _replace_everywhere(doc: Document, mapping: Dict[str, str]):
@@ -65,7 +78,7 @@ def _replace_everywhere(doc: Document, mapping: Dict[str, str]):
     # Колонтитулы
     for section in doc.sections:
         for header_footer in (section.header, section.footer):
-            if header_footer is None:
+            if not header_footer or not header_footer.is_linked_to_previous:
                 continue
             for paragraph in header_footer.paragraphs:
                 _replace_text_in_paragraph(paragraph, mapping)
