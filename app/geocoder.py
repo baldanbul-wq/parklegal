@@ -1,9 +1,10 @@
-import os
 import re
 import httpx
+from app.logger import logger
+from app.config import settings
 
 
-YANDEX_GEOCODER_API_KEY = os.getenv("YANDEX_GEOCODER_API_KEY", "").strip()
+YA_GEOCODER_API_KEY = settings.yandex_geocoder_api_key.get_secret_value()
 
 
 def normalize_address(addr: str) -> str:
@@ -24,7 +25,8 @@ async def geocode_address(address: str) -> tuple[float, float]:
     Геокодирование адреса через Яндекс.Геокодер.
     Возвращает (lat, lon).
     """
-    if not YANDEX_GEOCODER_API_KEY:
+    logger.debug("YANDEX_GEOCODER_API_KEY(%s)", YA_GEOCODER_API_KEY)
+    if not YA_GEOCODER_API_KEY:
         raise RuntimeError("YANDEX_GEOCODER_API_KEY is not set")
 
     address = normalize_address(address)
@@ -33,7 +35,7 @@ async def geocode_address(address: str) -> tuple[float, float]:
 
     url = "https://geocode-maps.yandex.ru/1.x/"
     params = {
-        "apikey": YANDEX_GEOCODER_API_KEY,
+        "apikey": YA_GEOCODER_API_KEY,
         "format": "json",
         "geocode": address,
         "results": 1,

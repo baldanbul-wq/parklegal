@@ -1,12 +1,12 @@
-import asyncio
-import json
-import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 from shapely.geometry import Point, Polygon, MultiPolygon
 from shapely.strtree import STRtree
+
+from app.logger import logger
+from app.models import CourtModel
 
 COURTS_URL = "https://mos-gorsud.ru/api/courts"
 REFRESH_EVERY_SECONDS = 24 * 3600
@@ -31,17 +31,44 @@ _CACHE: Dict[str, Any] = {
     "index": None,
 }
 
+NEW_COURTS: List[CourtModel] = []
 
-async def _fetch_courts() -> List[dict]:
-    headers = {
-        "Accept": "application/json",
-        "User-Agent": "ParkLegal-DocGen/1.0",
-        "Referer": "https://mos-gorsud.ru/territorial",
-    }
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-        r = await client.get(COURTS_URL, headers=headers)
-        r.raise_for_status()
-        return r.json()
+
+async def fetch_courts_list() -> List[CourtModel]:
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        response = await client.get(
+            COURTS_URL,
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "ParkLegal-DocGen/1.0",
+                "Referer": "https://mos-gorsud.ru/territorial",
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+
+    if not isinstance(data, list):
+        raise ValueError("Ожидается массив объектов")
+
+    courts: List[CourtModel] = []
+    for item in data:
+        try:
+            court = CourtModel(**item)
+            courts.append(court)
+        except Exception as e:
+            print(f"Ошибка при валидации суда {item.get('id')}: {e}")
+            continue
+
+    # Обновляем глобальный список
+    NEW_COURTS.clear()
+    NEW_COURTS.extend(courts)
+
+    logger.info("Загружено %d судов в NEW_COURTS", len(NEW_COURTS))
+
+    # Перестраиваем кэш на основе новых данных
+    _rebuild_cache_from_new_courts()
+
+    return courts
 
 
 def _looks_like_point(x) -> bool:
@@ -126,17 +153,19 @@ def _bbox_score_for_moscow(geom) -> float:
     return score
 
 
-def _build_geom_for_court(court: dict):
-    pd = court.get("polygonData")
-    if not pd:
-        return None
-
+def _build_geom_for_court(court: CourtModel) -> Optional[Polygon | MultiPolygon]:
+    """
+    Строит геометрию полигона для суда на основе его polygonData.
+    Принимает объект CourtModel.
+    """
     try:
-        data = json.loads(pd)
-    except Exception:
+        # court.polygonData — это RootModel, используем .root для получения данных
+        data = court.polygonData.root  # Уже распарсенный список списков списков
+    except Exception as e:
+        logger.debug("Не удалось получить polygonData у суда %s: %s", court.alias, e)
         return None
 
-    if not isinstance(data, list) or not data:
+    if not data or not isinstance(data, list):
         return None
 
     polys_latlon: List[Polygon] = []
@@ -183,40 +212,30 @@ def _build_geom_for_court(court: dict):
     return MultiPolygon(polys)
 
 
-def _rebuild_cache(raw: List[dict]) -> None:
+
+def _rebuild_cache_from_new_courts() -> None:
+    """
+    Строит spatial-индекс на основе актуального списка NEW_COURTS.
+    Вызывается после обновления NEW_COURTS.
+    """
     geoms: List[Polygon | MultiPolygon] = []
     geom_to_court: Dict[int, dict] = {}
 
-    for c in raw:
-        g = _build_geom_for_court(c)
+    for court in NEW_COURTS:
+        g = _build_geom_for_court(court)
         if g is None:
+            logger.debug("No g from court %s", court.alias)
             continue
         geoms.append(g)
-        geom_to_court[id(g)] = c
+        geom_to_court[id(g)] = court.model_dump()
+
+    logger.debug("geoms count: %d: ", len(geoms))
+    logger.debug("geoms_to_court: %d", len(geom_to_court))
 
     _CACHE["geoms"] = geoms
     _CACHE["geom_to_court"] = geom_to_court
     _CACHE["index"] = STRtree(geoms) if geoms else None
 
-
-async def refresh_courts(force: bool = False) -> None:
-    now = time.time()
-    if (not force) and _CACHE["index"] and (now - _CACHE["loaded_at"] < REFRESH_EVERY_SECONDS):
-        return
-
-    raw = await _fetch_courts()
-    _rebuild_cache(raw)
-    _CACHE["loaded_at"] = now
-    _CACHE["last_error"] = None
-
-
-async def refresh_loop() -> None:
-    while True:
-        try:
-            await refresh_courts(force=False)
-        except Exception as e:
-            _CACHE["last_error"] = str(e)
-        await asyncio.sleep(REFRESH_EVERY_SECONDS)
 
 
 def find_court_by_latlon(lat: float, lon: float) -> Optional[CourtHit]:
@@ -224,18 +243,22 @@ def find_court_by_latlon(lat: float, lon: float) -> Optional[CourtHit]:
     Shapely 2.x: STRtree.query(...) возвращает индексы (numpy.int64),
     поэтому достаем геометрию через geoms[i].
     """
+    logger.debug("find_court_by_latlon(%r, %r)", lat, lon, extra={"lat": lat, "lon": lon})
     idx = _CACHE.get("index")
     geoms = _CACHE.get("geoms") or []
     geom_to_court = _CACHE.get("geom_to_court") or {}
 
     if not idx or not geoms:
+        logger.warning("not idx or not geoms in find_court_by_latlon call")
+        logger.debug("idx is %r, geoms is %r", idx, geoms)
         return None
 
     point = Point(lon, lat)
 
     try:
         cand_idx = idx.query(point)  # numpy array of indices (Shapely 2)
-    except Exception:
+    except Exception as exc:
+        logger.warning("cand_idx exception: %s", exc)
         return None
 
     # Пробуем сначала covers (включая границу), потом contains
@@ -255,27 +278,7 @@ def find_court_by_latlon(lat: float, lon: float) -> Optional[CourtHit]:
                     code=(str(c.get("code")) if c.get("code") is not None else None),
                 )
         except Exception:
-            continue
-
-    return None
-    point = Point(float(lon), float(lat))
-    candidates = idx.query(point)
-
-    for g in candidates:
-        try:
-            if g.covers(point):
-                c = geom_to_court.get(id(g))
-                if not c:
-                    continue
-                return CourtHit(
-                    id=str(c.get("id", "")),
-                    code=str(c.get("code", "")) if c.get("code") is not None else None,
-                    full_name=str(c.get("fullName", "")),
-                    address=str(c.get("address", "")),
-                    phones=(c.get("phones") or None),
-                    subway=(c.get("subwayStation") or None),
-                )
-        except Exception:
+            logger.warning("geom_to_court: %s, skip to next", exc)
             continue
 
     return None

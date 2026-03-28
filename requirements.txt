@@ -1,0 +1,8 @@
+httpx
+fastapi
+# docx
+python-docx
+shapely
+uvicorn
+python-dotenv
+pydantic-settings
